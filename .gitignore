@@ -1,1 +1,6 @@
-origin data/
+./origin_data/
+./data/
+./.DS_Store
+./.vscode/
+./__pycache__/
+./.gitignore
