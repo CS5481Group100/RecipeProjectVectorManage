@@ -10,6 +10,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 import faiss
 import numpy as np
 
+from . import llm_api_QA
 from .embeddings import EmbeddingModel
 from .utils import l2_normalize_vectors, to_float32
 from .reranker import Reranker
@@ -90,6 +91,11 @@ if __name__ == '__main__':
         Examples:
           python -m vector_store.query "我的问题" --use-rerank --rerank-mode cross
         """
+        # reshape query using LLM
+        new_query = llm_api_QA.reshape_query(query)
+        if new_query != "":
+            query = new_query
+
         res = search(index, meta, query, k=k, model_name=model)
 
         if use_rerank and len(res) > 0:
