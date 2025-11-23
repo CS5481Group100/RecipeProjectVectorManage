@@ -43,8 +43,8 @@ ORIGIN_DIR = "./origin_data/recipes_cleaned.json"
 with open(ORIGIN_DIR, "r") as infile:
     data = json.load(infile)
 
-with open("./origin_data/recipes_cleaned_sample500.json", "w") as outfile:
-    json.dump(data[:500], outfile, ensure_ascii=False, indent=2)
+with open("./origin_data/recipes_cleaned_sample10000.json", "w") as outfile:
+    json.dump(data[:10000], outfile, ensure_ascii=False, indent=2)
 
 str_len = []
 for di in data:

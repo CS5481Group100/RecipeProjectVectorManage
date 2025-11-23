@@ -124,6 +124,7 @@ class Reranker:
             c["combined_score"] = float(combined[i])
 
         candidates.sort(key=lambda x: x["combined_score"], reverse=True)
+        candidates = [ti for ti in candidates if ti['combined_score'] >= 0.4]
         if top_k is not None:
             return candidates[: int(top_k)]
         return candidates
