@@ -1,4 +1,5 @@
 """FastAPI service for the recipe vector store."""
+import logging
 import os
 import threading
 import time
@@ -13,6 +14,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
 
 from vector_store.config import (
     DEFAULT_BI_RERANKER_MODEL,
@@ -31,6 +33,11 @@ from vector_store.embeddings import EmbeddingModel
 from vector_store.query import load_index_and_meta
 from vector_store.reranker import Reranker
 from vector_store.utils import l2_normalize_vectors, to_float32
+
+
+logger = logging.getLogger("recipe_retrieval")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 
 class SearchRequest(BaseModel):
@@ -159,6 +166,8 @@ class RetrievalEngine:
         for score, idx in zip(distances[0], indices[0]):
             if idx < 0:
                 continue
+            if score < 0.4:
+                break
             meta = metas[idx]
             hits.append(
                 {
@@ -184,6 +193,21 @@ class RetrievalEngine:
                     timings["rerank"] = (time.perf_counter() - rerank_start) * 1000
                 finally:
                     reranker.weight_initial_score = original_weight
+
+        log_lines = [f"query: {payload.query.strip()}"]
+        if hits:
+            for idx, hit in enumerate(hits, start=1):
+                name = hit.get("name") or hit.get("id") or "<unnamed>"
+                sim_score = hit.get("score")
+                cross_score = hit.get("rerank_score")
+                sim_str = f"{sim_score:.3f}" if isinstance(sim_score, (int, float)) else "-"
+                cross_str = f"{cross_score:.3f}" if isinstance(cross_score, (int, float)) else "-"
+                log_lines.append(
+                    f"  {idx}. {name} | sim={sim_str} | cross={cross_str}"
+                )
+        else:
+            log_lines.append("  <no hits>")
+        logger.info("\n".join(log_lines))
 
         timings["total"] = sum(timings.values())
         return SearchResponse(
@@ -220,6 +244,13 @@ def get_engine() -> RetrievalEngine:
 
 app = FastAPI(title="Recipe Retrieval API", version="0.1.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有来源调用
+    allow_credentials=True,  # 若需携带凭证（如Token、Cookie）则设为True
+    allow_methods=["*"],     # 允许所有HTTP方法（GET、POST、PUT等）
+    allow_headers=["*"],     # 允许所有请求头（如Content-Type、Authorization）
+)
 
 _INDEX_HTML = """
 <!DOCTYPE html>
@@ -352,6 +383,7 @@ def search(payload: SearchRequest):
 
 @app.post("/search/docs", response_model=List[SearchResult])
 def search_docs(payload: SearchRequest):
+    print("Received search/docs request at:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     engine = get_engine()
     response = engine.search(payload)
     return response.results
