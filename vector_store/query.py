@@ -11,7 +11,7 @@ import faiss
 import numpy as np
 
 from .embeddings import EmbeddingModel
-from .utils import l2_normalize_vectors, to_float32
+from .utils import l2_normalize_vectors, to_float32, render_source_text
 from .reranker import Reranker
 from .config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -56,11 +56,30 @@ def search(index_path: str, meta_path: str, query: str, k: int = 5, model_name: 
 
     D, I = index.search(q_emb, k)
     results = []
+    meta_count = len(metas)
     for score, idx in zip(D[0], I[0]):
         if idx < 0:
             continue
+        if idx >= meta_count:
+            print(
+                f"[warn] FAISS returned idx={idx} but only {meta_count} meta rows. Check index/meta files.",
+                flush=True,
+            )
+            continue
         m = metas[idx]
-        results.append({'score': float(score), 'id': m.get('id'), 'name': m.get('name'), 'text': m.get('text')})
+        source_text = render_source_text(m.get('source')) or None
+        results.append(
+            {
+                'score': float(score),
+                'id': m.get('id'),
+                'name': m.get('name'),
+                'text': m.get('text'),
+                'type': m.get('type'),
+                'origin_id': m.get('origin_id'),
+                'source': m.get('source'),
+                'source_text': source_text,
+            }
+        )
     return results
 
 
