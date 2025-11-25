@@ -16,10 +16,19 @@ except RuntimeError:
     pass
 
 from typing import List, Dict, Callable, Optional
+import logging
 import numpy as np
 import torch
 
 from sentence_transformers import CrossEncoder, SentenceTransformer
+
+from .config import (
+    DEFAULT_RERANK_COMBINED_THRESHOLD,
+    DEFAULT_RERANK_SCORE_KILL_THRESHOLD,
+)
+
+
+logger = logging.getLogger("recipe_retrieval.reranker")
 
 
 class Reranker:
@@ -59,12 +68,23 @@ class Reranker:
                 # 这是一个表现良好的 cross-encoder，多语/中文也能用
                 model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
             self.model = CrossEncoder(model_name, device=self.device)
+
             self.bi_model = None
+            logger.info(
+                "Loaded cross reranker model '%s' on device='%s'",
+                model_name,
+                self.device,
+            )
         elif self.mode == "bi":
             if model_name is None:
                 model_name = "paraphrase-multilingual-MiniLM-L12-v2"
             self.bi_model = SentenceTransformer(model_name, device=self.device)
             self.model = None
+            logger.info(
+                "Loaded bi reranker model '%s' on device='%s'",
+                model_name,
+                self.device,
+            )
         else:
             raise ValueError("mode must be 'cross' or 'bi'")
 
@@ -74,7 +94,8 @@ class Reranker:
             return scores
         mn, mx = float(scores.min()), float(scores.max())
         if mx - mn <= 1e-12:
-            return np.zeros_like(scores, dtype=float)
+            # If all values identical, treat them as equally strong instead of zeroing out.
+            return np.ones_like(scores, dtype=float)
         return (scores - mn) / (mx - mn)
 
     def rerank(
@@ -99,16 +120,32 @@ class Reranker:
 
         if self.mode == "cross":
             pairs = [(query, d) for d in docs]
+
             scores = []
             for i in range(0, len(pairs), self.cross_batch_size):
                 batch = pairs[i : i + self.cross_batch_size]
                 batch_scores = self.model.predict(batch)
                 scores.extend(batch_scores.tolist())
+                
             rerank_scores = np.array(scores, dtype=float)
+            logger.info(
+                "[reranker] query=%s | cross_scores=%s",
+                query,
+                ", ".join(f"{s:.3f}" for s in rerank_scores.tolist()),
+            )
         else:
             q_emb = self.bi_model.encode([query], convert_to_numpy=True, normalize_embeddings=True)[0]
             d_embs = self.bi_model.encode(docs, convert_to_numpy=True, normalize_embeddings=True)
             rerank_scores = (d_embs @ q_emb).astype(float)
+
+        if self.mode == "cross" and DEFAULT_RERANK_SCORE_KILL_THRESHOLD > float("-inf"):
+            keep_mask = rerank_scores >= DEFAULT_RERANK_SCORE_KILL_THRESHOLD
+            rerank_scores = rerank_scores[keep_mask]
+            init_scores = init_scores[keep_mask]
+            docs = [doc for doc, keep in zip(docs, keep_mask) if keep]
+            candidates = [cand for cand, keep in zip(candidates, keep_mask) if keep]
+            if len(candidates) == 0:
+                return []
 
         rerank_norm = self._normalize_scores(rerank_scores)
         init_norm = self._normalize_scores(init_scores)
@@ -124,7 +161,9 @@ class Reranker:
             c["combined_score"] = float(combined[i])
 
         candidates.sort(key=lambda x: x["combined_score"], reverse=True)
-        candidates = [ti for ti in candidates if ti['combined_score'] >= 0.4]
+        candidates = [
+            ti for ti in candidates if ti["combined_score"] >= DEFAULT_RERANK_COMBINED_THRESHOLD
+        ]
         if top_k is not None:
             return candidates[: int(top_k)]
         return candidates
