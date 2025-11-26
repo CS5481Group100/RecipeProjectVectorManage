@@ -5,4 +5,5 @@ __all__ = [
     "query",
     "reranker",
     "utils",
+    "llm_api_QA",
 ]
